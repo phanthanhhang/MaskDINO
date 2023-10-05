@@ -1,20 +1,20 @@
 # Installation
 ## Setup git folder
 - Clone repo:
-  `git clone https://github.com/phanthanhhang/MaskDINO.git`
+`git clone https://github.com/phanthanhhang/MaskDINO.git`
 - Checkout to the model-tuning branch:
-  `git checkout MCAI-695_tune_model_for_luggage_parts`
+`git checkout MCAI-695_tune_model_for_luggage_parts`
 
 ## Docker setup
-- build a docker image. In training machine:
-  `docker build -t maskdino_image -f docker/`
+- Build a docker image. In training machine:
+`docker build -t maskdino_image -f docker/`
 - Run a docker container
-  `nvidia-docker run --name maskdino_hang -it -v /mnt/ssd1/hang/MaskDINO:/MaskDINO -v /data2/hang/datasets:/MaskDINO/total_datasets -v    /mnt/ssd1/hang/datasets:/MaskDINO/mnt_datasets --shm-size=64g -p 3200:3200 -p 3201:3201 maskdino_image`
-- Inside the `/MaskDINO` dir: install detectron2
-  Clone detectron2 repo: `https://github.com/phanthanhhang/detectron2.git`
-  Install : `python -m pip install -e detectron2`
+`nvidia-docker run --name maskdino_hang -it -v /mnt/ssd1/hang/MaskDINO:/MaskDINO -v /data2/hang/datasets:/MaskDINO/total_datasets -v    /mnt/ssd1/hang/datasets:/MaskDINO/mnt_datasets --shm-size=64g -p 3200:3200 -p 3201:3201 maskdino_image`
+- Install detectron2: Inside the `/MaskDINO` dir:
+  - Clone detectron2 repo: `https://github.com/phanthanhhang/detectron2.git`
+  - Install : `python -m pip install -e detectron2`
 - Install requirements
-  `pip install -r requirements.txt`
+`pip install -r requirements.txt`
 
 - CUDA kernel for MSDeformAttn: After preparing the required environment, run the following command to compile CUDA kernel for MSDeformAttn:
   CUDA_HOME must be defined and points to the directory of the installed CUDA toolkit.
