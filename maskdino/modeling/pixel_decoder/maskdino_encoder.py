@@ -248,6 +248,7 @@ class MaskDINOEncoder(nn.Module):
         self.maskdino_num_feature_levels = num_feature_levels  # always use 3 scales
         self.total_num_feature_levels = total_num_feature_levels
         self.common_stride = common_stride
+        self.conv_dim = conv_dim
 
         self.transformer_num_feature_levels = len(self.transformer_in_features)
         self.low_resolution_index = transformer_in_channels.index(max(transformer_in_channels))
@@ -287,6 +288,7 @@ class MaskDINOEncoder(nn.Module):
             num_encoder_layers=transformer_enc_layers,
             num_feature_levels=self.total_num_feature_levels,
         )
+        # print('find what 256 : ',conv_dim)
         N_steps = conv_dim // 2
         self.pe_layer = PositionEmbeddingSine(N_steps, normalize=True)
 
@@ -403,6 +405,7 @@ class MaskDINOEncoder(nn.Module):
             else:
                 split_size_or_sections[i] = y.shape[1] - level_start_index[i]
         y = torch.split(y, split_size_or_sections, dim=1)
+        # print('debug dino encoder : ',[i.shape for i in y])
 
         out = []
         multi_scale_features = []

@@ -8,6 +8,7 @@ import logging
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
 from torch import nn
+import torch
 
 from detectron2.config import configurable
 from detectron2.layers import Conv2d, ShapeSpec, get_norm
@@ -51,6 +52,12 @@ class MaskDINOHead(nn.Module):
         self.predictor = transformer_predictor
 
         self.num_classes = num_classes
+        
+        self.multiScaleViewClassifyHead = MultiScaleClassificationHead([self.pixel_decoder.conv_dim for i in range(self.pixel_decoder.total_num_feature_levels)],4)
+        # print(self.multiScaleViewClassifyHead)
+        # if self.training:
+        #     for param in self.
+        # print('init number level: ',self.pixel_decoder.total_num_feature_levels)
 
     @classmethod
     def from_config(cls, cfg, input_shape: Dict[str, ShapeSpec]):
@@ -76,7 +83,54 @@ class MaskDINOHead(nn.Module):
 
     def layers(self, features, mask=None,targets=None):
         mask_features, transformer_encoder_features, multi_scale_features = self.pixel_decoder.forward_features(features, mask)
+        # print('debug shape : ',[f.mean(dim=(-2, -1)).shape for f in multi_scale_features])
+        print('debug shape : ',[f.shape for f in multi_scale_features])
+        view_logit = self.multiScaleViewClassifyHead(multi_scale_features)
+        
+        return view_logit
+        # print('debug shape : ',[f.mean(dim=(-2, -1)).shape for f in multi_scale_features])
+        # predictions = self.predictor(multi_scale_features, mask_features, mask, targets=targets)
 
-        predictions = self.predictor(multi_scale_features, mask_features, mask, targets=targets)
+        # return predictions,
 
-        return predictions
+
+class MultiScaleClassificationHead(nn.Module):
+    def __init__(self, input_dims, num_classes):
+        """
+        Args:
+            input_dims (list of int): List of dimensions for each scale in multi_scale_features.
+            num_classes (int): Number of classes for classification.
+        """
+        super(MultiScaleClassificationHead, self).__init__()
+        
+        # Define linear layers for each scale to bring features to a common dimension
+        self.scale_fcs = nn.ModuleList([
+            nn.Linear(dim, 256) for dim in input_dims  # Adjust output dim (e.g., 256) if needed
+        ])
+        
+        # Final classification layer
+        self.classifier = nn.Linear(256 * len(input_dims), num_classes)
+
+    def forward(self, multi_scale_features):
+        """
+        Args:
+            multi_scale_features (list of torch.Tensor): List of feature maps from different scales.
+        
+        Returns:
+            torch.Tensor: Class logits of shape (batch_size, num_classes).
+        """
+        # Process each scale feature through its corresponding FC layer and pool spatial dimensions
+        processed_features = []
+        for feature, fc_layer in zip(multi_scale_features, self.scale_fcs):
+            # Global average pooling to reduce spatial dimensions
+            pooled_feature = feature.mean(dim=(-2, -1))  # (batch_size, feature_dim)
+            # Apply fully connected layer
+            processed_feature = fc_layer(pooled_feature)
+            processed_features.append(processed_feature)
+
+        # Concatenate processed features from all scales
+        combined_features = torch.cat(processed_features, dim=-1)  # (batch_size, 256 * len(input_dims))
+
+        # Pass through the classifier to get final class logits
+        class_logits = self.classifier(combined_features)
+        return class_logits

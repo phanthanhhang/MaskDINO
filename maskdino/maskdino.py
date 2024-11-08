@@ -262,7 +262,11 @@ class MaskDINO(nn.Module):
                     targets = self.prepare_targets(gt_instances, images)
             else:
                 targets = None
-            outputs,mask_dict = self.sem_seg_head(features,targets=targets)
+            # outputs,mask_dict = self.sem_seg_head(features,targets=targets)
+            outputs = self.sem_seg_head(features,targets=targets)
+            # print('debug dino :',[o.shape for o in outputs])
+            
+            return outputs
             # bipartite matching-based loss
             losses = self.criterion(outputs, targets,mask_dict)
 
@@ -274,6 +278,10 @@ class MaskDINO(nn.Module):
                     losses.pop(k)
             return losses
         else:
+            outputs = self.sem_seg_head(features,targets=targets)
+            # print('debug dino :',[o.shape for o in outputs])
+            
+            return outputs
             outputs, _ = self.sem_seg_head(features)
             mask_cls_results = outputs["pred_logits"]
             mask_pred_results = outputs["pred_masks"]
