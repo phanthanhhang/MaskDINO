@@ -11,6 +11,8 @@ import detectron2.data.transforms as T
 from detectron2.checkpoint import DetectionCheckpointer
 from detectron2.data import MetadataCatalog
 import os
+from torchvision import ops
+import numpy as np
 
 def setup_cfg(config_file, pretrained_weight):
     cfg = get_cfg()
@@ -22,7 +24,7 @@ def setup_cfg(config_file, pretrained_weight):
     cfg.freeze()
     return cfg
 
-class Load_model():
+class MaskDinoModel():
     def __init__(self, config_file, pretrained_weight):
         config = setup_cfg(config_file, pretrained_weight)
         self.cfg = config.clone()
@@ -38,7 +40,8 @@ class Load_model():
 
         self.input_format = self.cfg.INPUT.FORMAT
         assert self.input_format in ["RGB", "BGR"], self.input_format
-    def predictor(self, original_image):
+        
+    def predictor(self, original_image,threshold=0.4):
         with torch.no_grad():  # https://github.com/sphinx-doc/sphinx/issues/4258
             # Apply pre-processing to image.
             if self.input_format == "RGB":
@@ -49,16 +52,32 @@ class Load_model():
             image = torch.as_tensor(image.astype("float32").transpose(2, 0, 1))
 
             inputs = {"image": image, "height": height, "width": width}
-            predictions = self.model([inputs])[0]
+            predictions = self.model([inputs],threshold)[0]
             return predictions
     def detect(self, img_path, confidence_thres):
         torch.cuda.empty_cache()
         img = read_image(img_path)
         if img.shape[-1] == 3:
-            predictions = self.predictor(img)
+            predictions = self.predictor(img,confidence_thres)
             boxes, masks, scores, labels = convert_pred_results(predictions, confidence_thres)
+            # print(len(boxes),len(masks),len(scores),len(labels))
+            # print(boxes.shape)
+            if len(boxes) == 0:
+                return [],[],[],[]
+            
+            keep_indices = ops.nms(
+                boxes=torch.tensor(boxes),
+                scores=torch.tensor(scores),
+                iou_threshold=0.5  # Adjust this threshold as needed
+            ).cpu().numpy()
+            
+            # Filter results using NMS indices
+            boxes = np.array(boxes)[keep_indices]
+            masks = np.array(masks)[keep_indices]
+            scores = np.array(scores)[keep_indices]
+            labels = np.array(labels)[keep_indices]
             return boxes, masks, scores, labels
-        return None
+        return [],[],[],[]
 
     
 def convert_pred_results(predictions, confidence_thres):

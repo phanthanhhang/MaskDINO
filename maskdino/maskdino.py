@@ -20,6 +20,7 @@ from detectron2.utils.memory import retry_if_cuda_oom
 from .modeling.criterion import SetCriterion
 from .modeling.matcher import HungarianMatcher
 from .utils import box_ops
+import time
 
 
 @META_ARCH_REGISTRY.register()
@@ -219,7 +220,7 @@ class MaskDINO(nn.Module):
     def device(self):
         return self.pixel_mean.device
 
-    def forward(self, batched_inputs):
+    def forward(self, batched_inputs,threshold=0.4):
         """
         Args:
             batched_inputs: a list, batched outputs of :class:`DatasetMapper`.
@@ -326,7 +327,7 @@ class MaskDINO(nn.Module):
                     width = new_size[1]/image_size[1]*width
                     mask_box_result = self.box_postprocess(mask_box_result, height, width)
 
-                    instance_r = retry_if_cuda_oom(self.instance_inference)(mask_cls_result, mask_pred_result, mask_box_result)
+                    instance_r = retry_if_cuda_oom(self.instance_inference)(mask_cls_result, mask_pred_result, mask_box_result,threshold)
                     processed_results[-1]["instances"] = instance_r
 
             return processed_results
@@ -452,15 +453,65 @@ class MaskDINO(nn.Module):
 
             return panoptic_seg, segments_info
 
-    def instance_inference(self, mask_cls, mask_pred, mask_box_result):
-        # mask_pred is already processed to have the same shape as original input
+    # def instance_inference(self, mask_cls, mask_pred, mask_box_result):
+    #     # mask_pred is already processed to have the same shape as original input
+    #     image_size = mask_pred.shape[-2:]
+    #     scores = mask_cls.sigmoid()  # [100, 80]
+    #     labels = torch.arange(self.sem_seg_head.num_classes, device=self.device).unsqueeze(0).repeat(self.num_queries, 1).flatten(0, 1)
+    #     scores_per_image, topk_indices = scores.flatten(0, 1).topk(self.test_topk_per_image, sorted=False)  # select 100
+    #     labels_per_image = labels[topk_indices]
+    #     topk_indices = torch.div(topk_indices, self.sem_seg_head.num_classes,rounding_mode='floor')
+    #     mask_pred = mask_pred[topk_indices]
+    #     # if this is panoptic segmentation, we only keep the "thing" classes
+    #     if self.panoptic_on:
+    #         keep = torch.zeros_like(scores_per_image).bool()
+    #         for i, lab in enumerate(labels_per_image):
+    #             keep[i] = lab in self.metadata.thing_dataset_id_to_contiguous_id.values()
+    #         scores_per_image = scores_per_image[keep]
+    #         labels_per_image = labels_per_image[keep]
+    #         mask_pred = mask_pred[keep]
+    #     result = Instances(image_size)
+    #     # mask (before sigmoid)
+    #     result.pred_masks = (mask_pred > 0).float()
+    #     # half mask box half pred box
+    #     mask_box_result = mask_box_result[topk_indices]
+    #     if self.panoptic_on:
+    #         mask_box_result = mask_box_result[keep]
+    #     result.pred_boxes = Boxes(mask_box_result)
+    #     # Uncomment the following to get boxes from masks (this is slow)
+    #     # result.pred_boxes = BitMasks(mask_pred > 0).get_bounding_boxes()
+
+    #     # calculate average mask prob
+    #     mask_scores_per_image = (mask_pred.sigmoid().flatten(1) * result.pred_masks.flatten(1)).sum(1) / (result.pred_masks.flatten(1).sum(1) + 1e-6)
+    #     if self.focus_on_box:
+    #         mask_scores_per_image = 1.0
+    #     result.scores = scores_per_image * mask_scores_per_image
+    #     result.pred_classes = labels_per_image
+    #     return result
+    
+    def instance_inference(self, mask_cls, mask_pred, mask_box_result,threshold=0.4):
         image_size = mask_pred.shape[-2:]
+        
+        # Early confidence thresholding
         scores = mask_cls.sigmoid()  # [100, 80]
-        labels = torch.arange(self.sem_seg_head.num_classes, device=self.device).unsqueeze(0).repeat(self.num_queries, 1).flatten(0, 1)
-        scores_per_image, topk_indices = scores.flatten(0, 1).topk(self.test_topk_per_image, sorted=False)  # select 100
+        # Filter out low confidence predictions early
+        score_threshold = threshold  # Adjust this threshold as needed
+        max_scores, _ = scores.max(dim=1)
+        keep_idxs = max_scores > score_threshold
+        
+        # Only process high confidence predictions
+        scores = scores[keep_idxs]
+        mask_pred = mask_pred[keep_idxs]
+        mask_box_result = mask_box_result[keep_idxs]
+        
+        # Continue with remaining predictions
+        labels = torch.arange(self.sem_seg_head.num_classes, device=self.device).unsqueeze(0).repeat(scores.shape[0], 1).flatten(0, 1)
+        scores_per_image, topk_indices = scores.flatten(0, 1).topk(min(self.test_topk_per_image, scores.shape[0] * scores.shape[1]), sorted=False)
+        
         labels_per_image = labels[topk_indices]
-        topk_indices = torch.div(topk_indices, self.sem_seg_head.num_classes,rounding_mode='floor')
+        topk_indices = torch.div(topk_indices, self.sem_seg_head.num_classes, rounding_mode='floor')
         mask_pred = mask_pred[topk_indices]
+
         # if this is panoptic segmentation, we only keep the "thing" classes
         if self.panoptic_on:
             keep = torch.zeros_like(scores_per_image).bool()
@@ -469,23 +520,22 @@ class MaskDINO(nn.Module):
             scores_per_image = scores_per_image[keep]
             labels_per_image = labels_per_image[keep]
             mask_pred = mask_pred[keep]
+
         result = Instances(image_size)
-        # mask (before sigmoid)
         result.pred_masks = (mask_pred > 0).float()
-        # half mask box half pred box
+        
         mask_box_result = mask_box_result[topk_indices]
         if self.panoptic_on:
             mask_box_result = mask_box_result[keep]
         result.pred_boxes = Boxes(mask_box_result)
-        # Uncomment the following to get boxes from masks (this is slow)
-        # result.pred_boxes = BitMasks(mask_pred > 0).get_bounding_boxes()
 
-        # calculate average mask prob
+        # Calculate average mask prob only for remaining predictions
         mask_scores_per_image = (mask_pred.sigmoid().flatten(1) * result.pred_masks.flatten(1)).sum(1) / (result.pred_masks.flatten(1).sum(1) + 1e-6)
         if self.focus_on_box:
             mask_scores_per_image = 1.0
         result.scores = scores_per_image * mask_scores_per_image
         result.pred_classes = labels_per_image
+        
         return result
 
     def box_postprocess(self, out_bbox, img_h, img_w):
